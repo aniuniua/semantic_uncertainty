@@ -189,6 +189,21 @@ class HuggingfaceModel(BaseModel):
                 device_map='auto',
                 **kwargs,
             )
+        elif 'qwen' in model_name.lower():
+            model_id = model_name if "/" in model_name else f"Qwen/{model_name}"
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                model_id,
+                trust_remote_code=True,
+                use_fast=True,
+            )
+
+            self.model = AutoModelForCausalLM.from_pretrained(
+                model_id,
+                trust_remote_code=True,
+                device_map="auto",
+                torch_dtype="auto",
+                max_memory={0: "80GiB"},
+            )
         else:
             raise ValueError
 
