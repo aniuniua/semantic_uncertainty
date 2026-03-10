@@ -17,7 +17,8 @@ def get_p_ik(train_embeddings, is_false, eval_embeddings=None, eval_is_false=Non
     # Convert the list of tensors to a 2D tensor.
     train_embeddings_tensor = torch.cat(train_embeddings, dim=0)  # pylint: disable=no-member
     # Convert the tensor to a numpy array.
-    embeddings_array = train_embeddings_tensor.cpu().numpy()
+    # embeddings_array = train_embeddings_tensor.cpu().numpy()
+    embeddings_array = train_embeddings_tensor.to(torch.float32).cpu().numpy()
 
     # Split the data into training and test sets.
     X_train, X_test, y_train, y_test = train_test_split(  # pylint: disable=invalid-name
@@ -28,7 +29,11 @@ def get_p_ik(train_embeddings, is_false, eval_embeddings=None, eval_is_false=Non
     model.fit(X_train, y_train)
 
     # Predict deterministically and probabilistically and compute accuracy and auroc for all splits.
-    X_eval = torch.cat(eval_embeddings, dim=0).cpu().numpy()  # pylint: disable=no-member,invalid-name
+    if eval_embeddings is None or eval_is_false is None:
+        raise ValueError("eval_embeddings and eval_is_false must be provided for p_ik evaluation.")
+
+    # Cast to float32 before converting to numpy; numpy doesn't support bfloat16.
+    X_eval = torch.cat(eval_embeddings, dim=0).to(torch.float32).cpu().numpy()  # pylint: disable=no-member,invalid-name
     y_eval = eval_is_false
 
     Xs = [X_train, X_test, X_eval]  # pylint: disable=invalid-name
