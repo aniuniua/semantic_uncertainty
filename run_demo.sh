@@ -41,7 +41,7 @@ else
 fi
 
 # Run the demo
-python semantic_uncertainty/semantic_uncertainty/generate_answers.py \
+python semantic_uncertainty/generate_answers.py \
   --model_name=Qwen/Qwen3-8B \
   --dataset=trivia_qa \
   --compute_uncertainties \

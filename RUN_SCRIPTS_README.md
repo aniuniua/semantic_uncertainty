@@ -187,3 +187,41 @@ export OPENAI_API_KEY="your_key_here"
 
 
 
+1、启动入口：generate_answers.py
+
+2、解析参数：
+model_name--使用哪个模型
+dataset--trivia_qa / squad
+num_samples--取多少问题
+num_generations--每个问题生成几次
+temperature--采样温度
+
+3、初始化模型：创建HuggingfaceModel
+
+4、加载数据集：huggingface datasets，如trivia_qa / squad
+
+5、生成答案
+
+6、语义聚类：NLI entailment model判断两个答案语义是否相同
+
+7、生成 semantic_ids，据此计算 entropy
+
+8、训练 p_ik
+(question_i , answer_j)  →  train_embeddings，有ground truth，p_ik​=P(answer k is correct∣embeddingk​)，据此训练分类器，解决：模型自信但错
+eval_embeddings，做预测（其实也有ground truth）
+
+文件结构
+semantic_uncertainty/
+│
+├── generate_answers.py
+│
+├── compute_uncertainty_measures.py
+│
+├── uncertainty/
+│   ├── semantic_uncertainty.py
+│   ├── uncertainty_measures/
+│   │      ├── semantic_entropy.py
+│   │      └── p_ik.py
+│
+└── utils/
+    └── utils.py
