@@ -72,6 +72,16 @@ def get_parser(stages=['generate', 'compute']):
             "--temperature", type=float, default=1.0,
             help="Temperature")
         parser.add_argument(
+            "--single_answer_mode",
+            default=False,
+            action=argparse.BooleanOptionalAction,
+            help=(
+                "If True, only generate a single answer per example using "
+                "args.temperature and log per-token probabilities. "
+                "Useful for debugging margin-style behavior."
+            ),
+        )
+        parser.add_argument(
             "--use_mc_options", type=bool, default=True,
             help="Include MC options question?")
         parser.add_argument(
