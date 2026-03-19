@@ -211,7 +211,7 @@ class HuggingfaceModel(BaseModel):
         self.stop_sequences = stop_sequences + [self.tokenizer.eos_token]
         self.token_limit = 4096 if 'Llama-2' in model_name else 2048
 
-    def predict(self, input_data, temperature, return_full=False):
+    def predict(self, input_data, temperature, return_full=False, return_margin=False):
 
         # Implement prediction.
         inputs = self.tokenizer(input_data, return_tensors="pt").to("cuda")
@@ -253,7 +253,7 @@ class HuggingfaceModel(BaseModel):
         full_answer = self.tokenizer.decode(
             outputs.sequences[0], skip_special_tokens=True)
 
-        if return_full:
+        if return_full and not return_margin:
             return full_answer
 
         # For some models, we need to remove the input_data from the answer.
@@ -369,7 +369,82 @@ class HuggingfaceModel(BaseModel):
         if len(log_likelihoods) == 0:
             raise ValueError
 
-        return sliced_answer, log_likelihoods, last_token_embedding
+        # At this point, `n_generated` may still include a pure stopping EOS token.
+        # We explicitly filter out EOS (and any padding) so that downstream token-
+        # level statistics only cover *semantic answer tokens*.
+        eos_id = self.tokenizer.eos_token_id
+        generated_with_stops = outputs.sequences[0][n_input_token:n_input_token + n_generated]
+        valid_indices = []
+        for idx, tok_id in enumerate(generated_with_stops):
+            if tok_id == eos_id:
+                # Skip pure stopping EOS from token-level stats.
+                continue
+            if pad_token_id is not None and tok_id == pad_token_id:
+                # Skip padding tokens if they ever appear in this slice.
+                continue
+            valid_indices.append(idx)
+
+        if not valid_indices:
+            raise ValueError('No valid answer tokens after filtering EOS/padding.')
+
+        effective_n = len(valid_indices)
+
+        if not return_margin:
+            # Backwards-compatible path: only return text, per-token log-likelihoods,
+            # and final embedding (used by most of the original codebase). We ensure
+            # that the log-likelihood vector only covers valid answer tokens.
+            filtered_log_likelihoods = [log_likelihoods[i] for i in valid_indices]
+            return sliced_answer, filtered_log_likelihoods, last_token_embedding
+
+        # Margin path: return token-level top-2 probabilities and margins for answer tokens.
+        # We restrict to generated answer tokens only, excluding prompt, padding, and
+        # pure stopping tokens (EOS / stop_sequences).
+        from torch.nn import functional as F  # Local import to avoid global dependency.
+
+        generated_token_ids = [int(generated_with_stops[i]) for i in valid_indices]
+
+        top2_per_step = []
+        for out_idx, step_idx in enumerate(valid_indices):
+            # scores[step_idx] is logits for step_idx-th generated token.
+            step_logits = outputs.scores[step_idx][0]
+            step_probs = F.softmax(step_logits, dim=-1)
+
+            top2_prob_vals, top2_prob_ids = step_probs.topk(k=2)
+            top1_prob = top2_prob_vals[0]
+            top2_prob = top2_prob_vals[1]
+            top1_id = top2_prob_ids[0]
+            top2_id = top2_prob_ids[1]
+
+            top1_logit = step_logits[top1_id]
+            top2_logit = step_logits[top2_id]
+
+            margin = float(top1_prob - top2_prob)
+            logit_margin = float(top1_logit - top2_logit)
+
+            top2_per_step.append(
+                {
+                    "top1_id": int(top1_id),
+                    "top1_prob": float(top1_prob),
+                    "top1_logit": float(top1_logit),
+                    "top2_id": int(top2_id),
+                    "top2_prob": float(top2_prob),
+                    "top2_logit": float(top2_logit),
+                    "margin": margin,  # probability margin (primary metric)
+                    "logit_margin": logit_margin,
+                }
+            )
+
+        # Filter log-likelihoods down to the same valid answer tokens used above so that
+        # alignment between `generated_token_ids`, `top2_per_step`, and log-likelihoods
+        # is exact.
+        filtered_log_likelihoods = [log_likelihoods[i] for i in valid_indices]
+
+        margin_info = {
+            "generated_token_ids": generated_token_ids,
+            "top2_per_step": top2_per_step,
+        }
+
+        return sliced_answer, filtered_log_likelihoods, last_token_embedding, margin_info
 
     def get_p_true(self, input_data):
         """Get the probability of the model anwering A (True) for the given input."""

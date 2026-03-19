@@ -198,8 +198,10 @@ def main(args):
                     # Temperature for first generation is always `0.1`.
                     temperature = 0.1 if i == 0 else args.temperature
 
-                predicted_answer, token_log_likelihoods, embedding = model.predict(
-                    local_prompt, temperature)
+                # In margin analysis we request additional token-level statistics
+                # (top-2 probabilities and margins) from the model.
+                predicted_answer, token_log_likelihoods, embedding, margin_info = model.predict(
+                    local_prompt, temperature, return_margin=True)
                 embedding = embedding.cpu() if embedding is not None else None
 
                 # Only compute accuracy if question is answerable.
@@ -219,34 +221,42 @@ def main(args):
                     logging.info('accuracy: '.ljust(15) + str(acc))
 
                     if args.single_answer_mode:
-                        # Decode generated tokens and align (approximately) with log-likelihoods.
-                        encoded = model.tokenizer(
-                            predicted_answer,
-                            add_special_tokens=False,
-                            return_tensors="pt",
-                        )
-                        token_ids = encoded["input_ids"][0].tolist()
+                        # Use token ids returned directly from the generation call so
+                        # that alignment between tokens and per-step statistics is exact.
+                        token_ids = margin_info["generated_token_ids"]
                         generated_tokens = model.tokenizer.convert_ids_to_tokens(token_ids)
 
-                        token_probs = [math.exp(lp) for lp in token_log_likelihoods]
-
-                        if len(generated_tokens) != len(token_log_likelihoods):
-                            logging.warning(
-                                "len(tokens)=%d, len(log_liks)=%d, possible slight mismatch "
-                                "between tokens and log-likelihoods.",
-                                len(generated_tokens),
-                                len(token_log_likelihoods),
-                            )
-
-                        # Sequence-level scores.
+                        # Sequence-level scores from sampled-token log-likelihoods.
                         sequence_logprob = float(sum(token_log_likelihoods))
                         avg_logprob = sequence_logprob / max(len(token_log_likelihoods), 1)
                         logging.info("sequence_logprob=%.4f", sequence_logprob)
                         logging.info("avg_token_logprob=%.4f", avg_logprob)
 
-                        # Per-token details.
-                        for tok, lp, p in zip(generated_tokens, token_log_likelihoods, token_probs):
-                            logging.info("token=%r, logp=%.4f, p=%.4f", tok, lp, p)
+                        # Probability margins and top-2 info returned from the model.
+                        top2_per_step = margin_info["top2_per_step"]
+                        margins = [step["margin"] for step in top2_per_step]
+                        mean_margin = float(np.mean(margins))
+                        min_margin = float(np.min(margins))
+                        max_margin = float(np.max(margins))
+                        last_margin = float(margins[-1])
+                        low_margin_ratio = float(np.mean(np.array(margins) < 0.1))
+
+                        logging.info("mean_margin=%.4f", mean_margin)
+                        logging.info("min_margin=%.4f", min_margin)
+                        logging.info("max_margin=%.4f", max_margin)
+                        logging.info("last_margin=%.4f", last_margin)
+                        logging.info("low_margin_ratio@0.1=%.4f", low_margin_ratio)
+
+                        # Per-token details: token text, sampled-token logprob, prob margin, etc.
+                        for tok, lp, step in zip(generated_tokens, token_log_likelihoods, top2_per_step):
+                            logging.info(
+                                "token=%r, logp=%.4f, top1_p=%.4f, top2_p=%.4f, margin=%.4f",
+                                tok,
+                                lp,
+                                step["top1_prob"],
+                                step["top2_prob"],
+                                step["margin"],
+                            )
 
                     accuracies.append(acc)
                     most_likely_answer_dict = {
@@ -254,6 +264,23 @@ def main(args):
                         'token_log_likelihoods': token_log_likelihoods,
                         'embedding': embedding,
                         'accuracy': acc}
+
+                    if args.single_answer_mode:
+                        # Persist margin statistics per example for later analysis.
+                        most_likely_answer_dict['margin_stats'] = {
+                            'generated_token_ids': token_ids,
+                            'top2_per_step': top2_per_step,
+                            'margins': margins,
+                            'answer_length': len(token_ids),
+                            'mean_margin': mean_margin,
+                            'min_margin': min_margin,
+                            'max_margin': max_margin,
+                            'last_margin': last_margin,
+                            'low_margin_ratio_0_1': low_margin_ratio,
+                            'sequence_logprob': sequence_logprob,
+                            'avg_token_logprob': avg_logprob,
+                        }
+
                     generations[example['id']].update({
                         'most_likely_answer': most_likely_answer_dict,
                         'reference': utils.get_reference(example)})
